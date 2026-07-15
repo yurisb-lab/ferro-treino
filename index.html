@@ -1,0 +1,529 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>FERRO — Diário de Treino</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+  html, body { margin: 0; padding: 0; background: #17181a; }
+  :root {
+    --bg: #17181a; --surface: #212325; --surface-2: #2a2c2f; --border: #3a3d40;
+    --text: #f3f1ea; --text-muted: #8f9294; --accent: #f2b705; --accent-dim: #6b5a12;
+    --success: #7fae5b; --danger: #c65d4a;
+  }
+  .ferro-root { background: var(--bg); color: var(--text); font-family: 'Inter', system-ui, sans-serif; min-height: 100vh; }
+  .ferro-display { font-family: 'Bebas Neue', 'Inter', sans-serif; letter-spacing: 0.03em; }
+  .ferro-mono { font-family: 'IBM Plex Mono', monospace; }
+  .ferro-scrollbar::-webkit-scrollbar { height: 0px; width: 0px; }
+  .plate {
+    width: 38px; height: 38px; border-radius: 9999px; border: 3px solid var(--border);
+    background: var(--surface-2); display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0; transition: transform 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+    cursor: pointer;
+  }
+  .plate:active { transform: scale(0.9); }
+  .plate::after { content: ''; width: 11px; height: 11px; border-radius: 9999px; background: var(--bg); transition: background 0.15s ease; }
+  .plate-filled { border-color: var(--accent); background: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
+  .plate-filled::after { background: var(--surface); }
+  .ferro-input { background: var(--surface-2); border: 1px solid var(--border); color: var(--text); border-radius: 8px; }
+  .ferro-input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .ferro-card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; }
+  .letter-badge {
+    font-family: 'Bebas Neue', sans-serif; background: var(--accent); color: #1a1200;
+    width: 30px; height: 30px; border-radius: 8px; display: flex; align-items: center;
+    justify-content: center; font-size: 18px; flex-shrink: 0;
+  }
+  @media (prefers-reduced-motion: reduce) { .plate { transition: none !important; } }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useRef, useMemo } = React;
+
+const STORAGE_KEY = "ferro-data";
+const LETTERS = "ABCDEFGHIJ".split("");
+const todayStr = () => new Date().toISOString().slice(0, 10);
+const uid = () => Math.random().toString(36).slice(2, 10);
+const nextLetter = (workouts) => {
+  const used = new Set(workouts.map((w) => w.letter));
+  return LETTERS.find((l) => !used.has(l)) || "?";
+};
+const fmtDate = (iso) => { const [y, m, d] = iso.split("-"); return `${d}/${m}`; };
+
+// ---------- local storage helpers (replaces window.storage from Claude artifacts) ----------
+function loadData() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return { workouts: [], logs: {} };
+    const parsed = JSON.parse(raw);
+    return { workouts: parsed.workouts || [], logs: parsed.logs || {} };
+  } catch (e) {
+    return { workouts: [], logs: {} };
+  }
+}
+function saveData(workouts, logs) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ workouts, logs }));
+  } catch (e) {
+    console.error("erro ao salvar dados", e);
+  }
+}
+
+// ---------- simple icons (stroke-based, 24x24 viewBox) ----------
+const Icon = ({ children, size = 18, color = "currentColor" }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    {children}
+  </svg>
+);
+const PlusIcon = (p) => <Icon {...p}><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></Icon>;
+const XIcon = (p) => <Icon {...p}><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></Icon>;
+const TrashIcon = (p) => <Icon {...p}><polyline points="3 6 5 6 21 6" /><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m2 0v14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V6h12z" /></Icon>;
+const PlayIcon = (p) => <Icon {...p}><polygon points="6 3 20 12 6 21 6 3" /></Icon>;
+const PauseIcon = (p) => <Icon {...p}><rect x="6" y="4" width="4" height="16" /><rect x="14" y="4" width="4" height="16" /></Icon>;
+const RotateIcon = (p) => <Icon {...p}><polyline points="1 4 1 10 7 10" /><path d="M3.51 15a9 9 0 1 0 .49-6.36L1 10" /></Icon>;
+const DumbbellIcon = (p) => <Icon {...p}><path d="M6.5 6.5 17.5 17.5" /><path d="M14 3l7 7" /><path d="M3 14l7 7" /><path d="M18 4l2 2" /><path d="M4 18l2 2" /></Icon>;
+const TrendIcon = (p) => <Icon {...p}><polyline points="22 7 13.5 15.5 8.5 10.5 2 17" /><polyline points="16 7 22 7 22 13" /></Icon>;
+
+// ---------- confirm-to-delete button ----------
+function DeleteButton({ onConfirm }) {
+  const [confirming, setConfirming] = useState(false);
+  useEffect(() => {
+    if (!confirming) return;
+    const t = setTimeout(() => setConfirming(false), 2500);
+    return () => clearTimeout(t);
+  }, [confirming]);
+  return (
+    <button
+      onClick={() => (confirming ? onConfirm() : setConfirming(true))}
+      className="flex items-center gap-1 text-xs px-2 py-1 rounded"
+      style={{ color: confirming ? "#1a0d09" : "var(--text-muted)", background: confirming ? "var(--danger)" : "transparent" }}
+    >
+      <TrashIcon size={13} />
+      {confirming ? "confirmar?" : ""}
+    </button>
+  );
+}
+
+// ---------- exercise row ----------
+function ExerciseRow({ exercise, todaysLogs, allLogs, onLogSet, onUndo, onDelete }) {
+  const lastLog = allLogs.length ? allLogs[allLogs.length - 1] : null;
+  const [weight, setWeight] = useState(lastLog ? String(lastLog.weight) : "");
+  const [reps, setReps] = useState(String(exercise.reps || ""));
+  const doneCount = todaysLogs.length;
+
+  const handlePlateTap = (idx) => {
+    if (idx < doneCount) onUndo();
+    else if (idx === doneCount) onLogSet(weight, reps);
+  };
+
+  return (
+    <div className="ferro-card p-3 mb-2">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="font-semibold text-sm truncate">{exercise.name}</div>
+          <div className="text-xs ferro-mono" style={{ color: "var(--text-muted)" }}>
+            meta {exercise.sets}x{exercise.reps}{lastLog ? ` · último ${lastLog.weight}kg` : ""}
+          </div>
+        </div>
+        <DeleteButton onConfirm={onDelete} />
+      </div>
+      <div className="flex items-center gap-2 mt-3 flex-wrap">
+        <input type="number" inputMode="decimal" value={weight} onChange={(e) => setWeight(e.target.value)} placeholder="kg"
+          className="ferro-input ferro-mono text-sm px-2 py-1.5 w-16 text-center" />
+        <input type="number" inputMode="numeric" value={reps} onChange={(e) => setReps(e.target.value)} placeholder="reps"
+          className="ferro-input ferro-mono text-sm px-2 py-1.5 w-16 text-center" />
+        <div className="flex items-center gap-1.5 ml-auto ferro-scrollbar overflow-x-auto">
+          {Array.from({ length: exercise.sets }).map((_, idx) => (
+            <div key={idx} onClick={() => handlePlateTap(idx)} className={`plate ${idx < doneCount ? "plate-filled" : ""}`} />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------- add workout modal ----------
+function AddWorkoutModal({ onAdd, onClose, suggestedLetter }) {
+  const [name, setName] = useState("");
+  return (
+    <div className="fixed inset-0 flex items-center justify-center p-4 z-50" style={{ background: "rgba(10,10,10,0.75)" }}>
+      <div className="ferro-card p-4 w-full max-w-xs">
+        <div className="flex items-center justify-between mb-3">
+          <div className="ferro-display text-2xl">Novo treino {suggestedLetter}</div>
+          <button onClick={onClose}><XIcon size={18} color="var(--text-muted)" /></button>
+        </div>
+        <label className="text-xs" style={{ color: "var(--text-muted)" }}>Nome do treino</label>
+        <input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="ex: Peito e Tríceps"
+          className="ferro-input w-full px-3 py-2 mt-1 mb-3 text-sm" />
+        <button onClick={() => name.trim() && onAdd(name.trim())} className="w-full py-2 rounded-lg font-semibold text-sm"
+          style={{ background: "var(--accent)", color: "#1a1200" }}>Criar treino</button>
+      </div>
+    </div>
+  );
+}
+
+// ---------- add exercise modal ----------
+function AddExerciseModal({ onAdd, onClose }) {
+  const [name, setName] = useState("");
+  const [sets, setSets] = useState("3");
+  const [reps, setReps] = useState("10");
+  return (
+    <div className="fixed inset-0 flex items-center justify-center p-4 z-50" style={{ background: "rgba(10,10,10,0.75)" }}>
+      <div className="ferro-card p-4 w-full max-w-xs">
+        <div className="flex items-center justify-between mb-3">
+          <div className="ferro-display text-2xl">Novo exercício</div>
+          <button onClick={onClose}><XIcon size={18} color="var(--text-muted)" /></button>
+        </div>
+        <label className="text-xs" style={{ color: "var(--text-muted)" }}>Nome</label>
+        <input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="ex: Supino reto"
+          className="ferro-input w-full px-3 py-2 mt-1 mb-3 text-sm" />
+        <div className="flex gap-3 mb-3">
+          <div className="flex-1">
+            <label className="text-xs" style={{ color: "var(--text-muted)" }}>Séries</label>
+            <input type="number" value={sets} onChange={(e) => setSets(e.target.value)} className="ferro-input w-full px-3 py-2 mt-1 text-sm ferro-mono" />
+          </div>
+          <div className="flex-1">
+            <label className="text-xs" style={{ color: "var(--text-muted)" }}>Repetições</label>
+            <input type="number" value={reps} onChange={(e) => setReps(e.target.value)} className="ferro-input w-full px-3 py-2 mt-1 text-sm ferro-mono" />
+          </div>
+        </div>
+        <button onClick={() => name.trim() && onAdd({ name: name.trim(), sets: Number(sets) || 3, reps: Number(reps) || 10 })}
+          className="w-full py-2 rounded-lg font-semibold text-sm" style={{ background: "var(--accent)", color: "#1a1200" }}>
+          Adicionar exercício
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ---------- rest timer ----------
+function TimerWidget() {
+  const PRESETS = [30, 60, 90, 120];
+  const [open, setOpen] = useState(false);
+  const [duration, setDuration] = useState(90);
+  const [remaining, setRemaining] = useState(90);
+  const [running, setRunning] = useState(false);
+  const intervalRef = useRef(null);
+
+  const beep = () => {
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.frequency.value = 880;
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      gain.gain.setValueAtTime(0.2, ctx.currentTime);
+      osc.start();
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
+      osc.stop(ctx.currentTime + 0.5);
+    } catch (e) {}
+    if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
+  };
+
+  useEffect(() => {
+    if (!running) return;
+    intervalRef.current = setInterval(() => {
+      setRemaining((r) => {
+        if (r <= 1) { clearInterval(intervalRef.current); setRunning(false); beep(); return 0; }
+        return r - 1;
+      });
+    }, 1000);
+    return () => clearInterval(intervalRef.current);
+  }, [running]);
+
+  const pick = (d) => { setDuration(d); setRemaining(d); setRunning(false); };
+  const pct = duration ? remaining / duration : 0;
+  const R = 60;
+  const circumference = 2 * Math.PI * R;
+
+  if (!open) {
+    return (
+      <button onClick={() => setOpen(true)} className="fixed bottom-20 right-4 z-40 flex items-center justify-center rounded-full"
+        style={{ width: 56, height: 56, background: "var(--accent)", boxShadow: "0 4px 14px rgba(0,0,0,0.4)" }}>
+        <span className="ferro-display text-lg" style={{ color: "#1a1200" }}>{running ? remaining : "⏱"}</span>
+      </button>
+    );
+  }
+
+  return (
+    <div className="fixed inset-0 flex items-end sm:items-center justify-center z-50" style={{ background: "rgba(10,10,10,0.75)" }}>
+      <div className="ferro-card p-5 w-full max-w-xs">
+        <div className="flex items-center justify-between mb-4">
+          <div className="ferro-display text-2xl">Descanso</div>
+          <button onClick={() => setOpen(false)}><XIcon size={18} color="var(--text-muted)" /></button>
+        </div>
+        <div className="flex justify-center mb-4">
+          <svg width="140" height="140" viewBox="0 0 140 140">
+            <circle cx="70" cy="70" r={R} fill="none" stroke="var(--surface-2)" strokeWidth="10" />
+            <circle cx="70" cy="70" r={R} fill="none" stroke="var(--accent)" strokeWidth="10" strokeLinecap="round"
+              strokeDasharray={circumference} strokeDashoffset={circumference * (1 - pct)}
+              transform="rotate(-90 70 70)" style={{ transition: "stroke-dashoffset 1s linear" }} />
+            <text x="70" y="78" textAnchor="middle" fontFamily="'IBM Plex Mono', monospace" fontSize="30" fill="var(--text)">{remaining}</text>
+          </svg>
+        </div>
+        <div className="flex gap-2 mb-4 justify-center">
+          {PRESETS.map((p) => (
+            <button key={p} onClick={() => pick(p)} className="px-3 py-1.5 rounded-lg text-xs ferro-mono"
+              style={{ background: duration === p ? "var(--accent)" : "var(--surface-2)", color: duration === p ? "#1a1200" : "var(--text-muted)" }}>
+              {p}s
+            </button>
+          ))}
+        </div>
+        <div className="flex gap-2">
+          <button onClick={() => setRunning((r) => !r)} className="flex-1 py-2.5 rounded-lg font-semibold text-sm flex items-center justify-center gap-2"
+            style={{ background: "var(--accent)", color: "#1a1200" }}>
+            {running ? <PauseIcon size={16} /> : <PlayIcon size={16} />}
+            {running ? "Pausar" : "Começar"}
+          </button>
+          <button onClick={() => { setRunning(false); setRemaining(duration); }} className="px-3 py-2.5 rounded-lg" style={{ background: "var(--surface-2)" }}>
+            <RotateIcon size={16} color="var(--text-muted)" />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------- simple SVG line chart (replaces recharts) ----------
+function SimpleLineChart({ data }) {
+  const width = 300, height = 180, padding = { top: 14, right: 14, bottom: 24, left: 34 };
+  const innerW = width - padding.left - padding.right;
+  const innerH = height - padding.top - padding.bottom;
+  const weights = data.map((d) => d.weight);
+  const min = Math.min(...weights), max = Math.max(...weights);
+  const range = max - min || 1;
+  const x = (i) => padding.left + (i / (data.length - 1)) * innerW;
+  const y = (w) => padding.top + innerH - ((w - min) / range) * innerH;
+  const path = data.map((d, i) => `${i === 0 ? "M" : "L"} ${x(i)} ${y(d.weight)}`).join(" ");
+
+  return (
+    <svg viewBox={`0 0 ${width} ${height}`} width="100%" height="100%">
+      {[0, 0.5, 1].map((t, i) => (
+        <line key={i} x1={padding.left} x2={width - padding.right} y1={padding.top + innerH * t} y2={padding.top + innerH * t}
+          stroke="var(--border)" strokeDasharray="3 3" />
+      ))}
+      <path d={path} fill="none" stroke="var(--accent)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+      {data.map((d, i) => (
+        <g key={i}>
+          <circle cx={x(i)} cy={y(d.weight)} r="3.5" fill="var(--accent)" />
+          <text x={x(i)} y={height - 6} textAnchor="middle" fontSize="10" fill="var(--text-muted)">{d.label}</text>
+        </g>
+      ))}
+      <text x={padding.left - 6} y={padding.top + 4} textAnchor="end" fontSize="10" fill="var(--text-muted)">{max}</text>
+      <text x={padding.left - 6} y={padding.top + innerH} textAnchor="end" fontSize="10" fill="var(--text-muted)">{min}</text>
+    </svg>
+  );
+}
+
+// ---------- progress tab ----------
+function ProgressTab({ workouts, logs }) {
+  const allExercises = useMemo(() => {
+    const list = [];
+    workouts.forEach((w) => w.exercises.forEach((e) => list.push({ ...e, workoutLabel: `${w.letter} · ${w.name}` })));
+    return list;
+  }, [workouts]);
+
+  const [selectedId, setSelectedId] = useState(allExercises[0]?.id || "");
+  useEffect(() => {
+    if (!allExercises.find((e) => e.id === selectedId)) setSelectedId(allExercises[0]?.id || "");
+  }, [allExercises, selectedId]);
+
+  const selected = allExercises.find((e) => e.id === selectedId);
+  const rawLogs = (selected && logs[selected.id]) || [];
+
+  const chartData = useMemo(() => {
+    const byDate = {};
+    rawLogs.forEach((l) => { if (!byDate[l.date] || l.weight > byDate[l.date]) byDate[l.date] = l.weight; });
+    return Object.entries(byDate).sort((a, b) => (a[0] > b[0] ? 1 : -1)).map(([date, weight]) => ({ date, label: fmtDate(date), weight }));
+  }, [rawLogs]);
+
+  const maxWeight = chartData.length ? Math.max(...chartData.map((d) => d.weight)) : 0;
+  const lastWeight = chartData.length ? chartData[chartData.length - 1].weight : 0;
+  const totalSets = rawLogs.length;
+
+  if (allExercises.length === 0) {
+    return (
+      <div className="px-4 py-10 text-center">
+        <div className="ferro-display text-3xl mb-2">Sem dados ainda</div>
+        <p className="text-sm" style={{ color: "var(--text-muted)" }}>Crie um treino e registre algumas séries — o progresso aparece aqui.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="px-4 py-4">
+      <select value={selectedId} onChange={(e) => setSelectedId(e.target.value)} className="ferro-input w-full px-3 py-2 mb-4 text-sm">
+        {allExercises.map((e) => <option key={e.id} value={e.id}>{e.workoutLabel} — {e.name}</option>)}
+      </select>
+      <div className="grid grid-cols-3 gap-2 mb-4">
+        <div className="ferro-card p-3 text-center">
+          <div className="ferro-mono text-xl" style={{ color: "var(--accent)" }}>{lastWeight || "–"}</div>
+          <div className="text-xs" style={{ color: "var(--text-muted)" }}>último kg</div>
+        </div>
+        <div className="ferro-card p-3 text-center">
+          <div className="ferro-mono text-xl" style={{ color: "var(--accent)" }}>{maxWeight || "–"}</div>
+          <div className="text-xs" style={{ color: "var(--text-muted)" }}>recorde kg</div>
+        </div>
+        <div className="ferro-card p-3 text-center">
+          <div className="ferro-mono text-xl" style={{ color: "var(--accent)" }}>{totalSets}</div>
+          <div className="text-xs" style={{ color: "var(--text-muted)" }}>séries no total</div>
+        </div>
+      </div>
+      <div className="ferro-card p-3" style={{ height: 220 }}>
+        {chartData.length >= 2 ? <SimpleLineChart data={chartData} /> : (
+          <div className="h-full flex items-center justify-center text-sm text-center px-4" style={{ color: "var(--text-muted)" }}>
+            Registre pelo menos duas sessões para ver o gráfico de progresso.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------- main app ----------
+function App() {
+  const initial = loadData();
+  const [workouts, setWorkouts] = useState(initial.workouts);
+  const [logs, setLogs] = useState(initial.logs);
+  const [tab, setTab] = useState("treinos");
+  const [activeWorkoutId, setActiveWorkoutId] = useState(initial.workouts[0]?.id || null);
+  const [showAddWorkout, setShowAddWorkout] = useState(false);
+  const [showAddExercise, setShowAddExercise] = useState(false);
+
+  useEffect(() => { saveData(workouts, logs); }, [workouts, logs]);
+  useEffect(() => {
+    if (!workouts.find((w) => w.id === activeWorkoutId)) setActiveWorkoutId(workouts[0]?.id || null);
+  }, [workouts, activeWorkoutId]);
+
+  const activeWorkout = workouts.find((w) => w.id === activeWorkoutId) || null;
+
+  const addWorkout = (name) => {
+    const w = { id: uid(), letter: nextLetter(workouts), name, exercises: [] };
+    setWorkouts((prev) => [...prev, w]);
+    setActiveWorkoutId(w.id);
+    setShowAddWorkout(false);
+  };
+  const deleteWorkout = (id) => setWorkouts((prev) => prev.filter((w) => w.id !== id));
+  const addExercise = (ex) => {
+    setWorkouts((prev) => prev.map((w) => (w.id === activeWorkoutId ? { ...w, exercises: [...w.exercises, { id: uid(), ...ex }] } : w)));
+    setShowAddExercise(false);
+  };
+  const deleteExercise = (exId) => {
+    setWorkouts((prev) => prev.map((w) => (w.id === activeWorkoutId ? { ...w, exercises: w.exercises.filter((e) => e.id !== exId) } : w)));
+  };
+  const logSet = (exerciseId, weight, reps) => {
+    setLogs((prev) => {
+      const arr = prev[exerciseId] ? [...prev[exerciseId]] : [];
+      arr.push({ id: uid(), date: todayStr(), weight: Number(weight) || 0, reps: Number(reps) || 0, ts: Date.now() });
+      return { ...prev, [exerciseId]: arr };
+    });
+  };
+  const undoLastSetToday = (exerciseId) => {
+    setLogs((prev) => {
+      const arr = prev[exerciseId] ? [...prev[exerciseId]] : [];
+      const today = todayStr();
+      for (let i = arr.length - 1; i >= 0; i--) { if (arr[i].date === today) { arr.splice(i, 1); break; } }
+      return { ...prev, [exerciseId]: arr };
+    });
+  };
+
+  return (
+    <div className="ferro-root" style={{ minHeight: "100vh", maxWidth: 420, margin: "0 auto", position: "relative" }}>
+      <div className="px-4 pt-5 pb-3 sticky top-0 z-30" style={{ background: "var(--bg)", borderBottom: "1px solid var(--border)" }}>
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="ferro-display text-4xl leading-none">FERRO</div>
+            <div className="text-xs" style={{ color: "var(--text-muted)" }}>cada série conta</div>
+          </div>
+          <div className="ferro-mono text-xs px-2 py-1 rounded" style={{ background: "var(--surface-2)", color: "var(--text-muted)" }}>
+            {new Date().toLocaleDateString("pt-BR", { day: "2-digit", month: "short" })}
+          </div>
+        </div>
+      </div>
+
+      {tab === "treinos" && (
+        <div className="pb-24">
+          <div className="px-4 pt-3 pb-2 flex gap-2 overflow-x-auto ferro-scrollbar">
+            {workouts.map((w) => (
+              <button key={w.id} onClick={() => setActiveWorkoutId(w.id)} className="flex items-center gap-2 px-3 py-2 rounded-xl flex-shrink-0"
+                style={{ background: activeWorkoutId === w.id ? "var(--surface-2)" : "transparent", border: `1px solid ${activeWorkoutId === w.id ? "var(--accent)" : "var(--border)"}` }}>
+                <span className="letter-badge">{w.letter}</span>
+                <span className="text-sm font-medium whitespace-nowrap">{w.name}</span>
+              </button>
+            ))}
+            <button onClick={() => setShowAddWorkout(true)} className="flex items-center justify-center rounded-xl flex-shrink-0"
+              style={{ width: 42, height: 42, border: "1px dashed var(--border)" }}>
+              <PlusIcon size={18} color="var(--text-muted)" />
+            </button>
+          </div>
+
+          {!activeWorkout && (
+            <div className="px-4 py-14 text-center">
+              <div className="flex justify-center mb-3"><DumbbellIcon size={40} color="var(--border)" /></div>
+              <div className="ferro-display text-3xl mb-2">Nenhum treino ainda</div>
+              <p className="text-sm mb-4" style={{ color: "var(--text-muted)" }}>Crie seu primeiro treino (A, B, C…) e comece a registrar suas séries.</p>
+              <button onClick={() => setShowAddWorkout(true)} className="px-4 py-2 rounded-lg font-semibold text-sm inline-flex items-center gap-2"
+                style={{ background: "var(--accent)", color: "#1a1200" }}>
+                <PlusIcon size={16} /> Criar treino
+              </button>
+            </div>
+          )}
+
+          {activeWorkout && (
+            <div className="px-4 pt-2">
+              <div className="flex items-center justify-between mb-3">
+                <div className="text-xs ferro-mono" style={{ color: "var(--text-muted)" }}>{activeWorkout.exercises.length} exercício(s)</div>
+                <DeleteButton onConfirm={() => deleteWorkout(activeWorkout.id)} />
+              </div>
+              {activeWorkout.exercises.map((ex) => {
+                const exLogs = logs[ex.id] || [];
+                const todaysLogs = exLogs.filter((l) => l.date === todayStr());
+                return (
+                  <ExerciseRow key={ex.id} exercise={ex} todaysLogs={todaysLogs} allLogs={exLogs}
+                    onLogSet={(w, r) => logSet(ex.id, w, r)} onUndo={() => undoLastSetToday(ex.id)} onDelete={() => deleteExercise(ex.id)} />
+                );
+              })}
+              <button onClick={() => setShowAddExercise(true)} className="w-full py-3 rounded-xl text-sm font-medium flex items-center justify-center gap-2 mt-1"
+                style={{ border: "1px dashed var(--border)", color: "var(--text-muted)" }}>
+                <PlusIcon size={16} /> Adicionar exercício
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {tab === "progresso" && <ProgressTab workouts={workouts} logs={logs} />}
+
+      <TimerWidget />
+
+      <div className="fixed bottom-0 left-0 right-0 flex z-40" style={{ background: "var(--surface)", borderTop: "1px solid var(--border)", maxWidth: 420, margin: "0 auto" }}>
+        <button onClick={() => setTab("treinos")} className="flex-1 flex flex-col items-center gap-1 py-2.5" style={{ color: tab === "treinos" ? "var(--accent)" : "var(--text-muted)" }}>
+          <DumbbellIcon size={20} />
+          <span className="text-xs font-medium">Treinos</span>
+        </button>
+        <button onClick={() => setTab("progresso")} className="flex-1 flex flex-col items-center gap-1 py-2.5" style={{ color: tab === "progresso" ? "var(--accent)" : "var(--text-muted)" }}>
+          <TrendIcon size={20} />
+          <span className="text-xs font-medium">Progresso</span>
+        </button>
+      </div>
+
+      {showAddWorkout && <AddWorkoutModal suggestedLetter={nextLetter(workouts)} onAdd={addWorkout} onClose={() => setShowAddWorkout(false)} />}
+      {showAddExercise && <AddExerciseModal onAdd={addExercise} onClose={() => setShowAddExercise(false)} />}
+    </div>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(<App />);
+</script>
+</body>
+</html>
